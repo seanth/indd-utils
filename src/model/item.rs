@@ -373,6 +373,26 @@ pub struct Link {
     pub format: Option<String>,
 }
 
+/// The `LinkResourceURI` of a Windows path with a drive letter
+/// (`C:\dir\a b.tif` gives `file:C:/dir/a%20b.tif`): the reverse of the
+/// rule from link URI to native path (`objects.md`, `FilePath`). `None`
+/// for any other path.
+pub(super) fn windows_file_uri(path: &str) -> Option<String> {
+    let b = path.as_bytes();
+    if b.len() < 3 || !b[0].is_ascii_alphabetic() || b[1] != b':' || b[2] != b'\\' {
+        return None;
+    }
+    let mut uri = String::from("file:");
+    for &c in path.replace('\\', "/").as_bytes() {
+        if c.is_ascii_alphanumeric() || b"-._~/:".contains(&c) {
+            uri.push(c as char);
+        } else {
+            uri.push_str(&format!("%{c:02X}"));
+        }
+    }
+    Some(uri)
+}
+
 /// The bytes of a file stored in the document, if there is one.
 pub(super) type EmbeddedFile = Option<Vec<u8>>;
 
@@ -1443,6 +1463,13 @@ impl<'a> Reader<'a> {
             Some(d) if d.len() >= 12 => self.link(self.cursor(&d[8..]).u32()?)?,
             _ => None,
         };
+        // Images of InDesign 2.0 name their link in an old link object.
+        let link = match link {
+            None if kind == GraphicKind::Image && self.enc().indesign_2() => {
+                self.old_link_2(uid)?.map(|l| (l, None))
+            }
+            link => link,
+        };
         let (link, contents) = match link {
             Some((link, data)) => (Some(link), data),
             None => {
@@ -1668,6 +1695,36 @@ impl<'a> Reader<'a> {
             Some(d) if d.len() >= 4 => self.cursor(&d).u32()? != 0,
             _ => false,
         })
+    }
+
+    /// The link of an image of InDesign 2.0: chunk 0x8C1B names an object
+    /// of class 0x8C01 whose chunk 0x8C04 holds the file's path at offset
+    /// 24 (`objects.md`, links of InDesign 2.0). Only drive-letter paths
+    /// are known; for other paths, or a chunk that does not parse, there
+    /// is no link and a warning.
+    fn old_link_2(&self, uid: u32) -> Result<Option<Link>, Error> {
+        let object = match self.chunk(uid, chunk::OLD_GRAPHIC_LINK)? {
+            Some(d) if d.len() >= 4 => self.cursor(&d).u32()?,
+            _ => return Ok(None),
+        };
+        if object == 0 || self.class(object) != Some(class::OLD_LINK) {
+            return Ok(None);
+        }
+        let path = match self.chunk(object, chunk::OLD_LINK_PATH)? {
+            Some(d) if d.len() > 24 => self.cursor(&d[24..]).name().ok(),
+            _ => None,
+        };
+        match path.and_then(|p| windows_file_uri(&p.name)) {
+            Some(uri) => Ok(Some(Link {
+                uid: object,
+                uri,
+                ..Link::default()
+            })),
+            None => {
+                self.warn(format!("image {uid}: path of link {object} not read"));
+                Ok(None)
+            }
+        }
     }
 
     /// The raw data object of graphic `uid`'s preview, if it names one.
@@ -2234,5 +2291,54 @@ mod preview_tests {
         let image = reader.graphic(18).unwrap().unwrap();
         assert_eq!(image.contents, None);
         assert_eq!(image.preview, Some(12));
+    }
+}
+
+#[cfg(test)]
+mod old_link_tests {
+    use super::*;
+    use crate::database::synthetic;
+    use crate::header::{ByteOrder, Version};
+
+    #[test]
+    fn makes_file_uris_of_windows_paths() {
+        assert_eq!(
+            windows_file_uri(r"C:\Dir\Sub dir\a b.tif").as_deref(),
+            Some("file:C:/Dir/Sub%20dir/a%20b.tif")
+        );
+        assert_eq!(windows_file_uri("Disk:Folder:a.tif"), None);
+        assert_eq!(windows_file_uri(""), None);
+    }
+
+    #[test]
+    fn reads_the_image_links_of_indesign_2() {
+        let v2 = Encoding::new(ByteOrder::Little, Version { major: 2, minor: 0 });
+        let mut path = vec![0u8; 24];
+        path.extend(synthetic::flagged_string(v2, 0, r"C:\Images\photo 1.tif"));
+        let objects = [
+            (
+                10,
+                class::IMAGE,
+                synthetic::chunks(&[(chunk::OLD_GRAPHIC_LINK, 11u32.to_le_bytes().to_vec())]),
+            ),
+            (
+                11,
+                class::OLD_LINK,
+                synthetic::chunks(&[
+                    (chunk::OLD_LINK_PATH, path),
+                    (chunk::OLD_GRAPHIC_LINK, 10u32.to_le_bytes().to_vec()),
+                ]),
+            ),
+        ];
+        let bytes = synthetic::image(&objects);
+        let db = synthetic::database_in(&bytes, &objects, v2);
+        let image = Reader::new(&db).graphic(10).unwrap().unwrap();
+        let link = image.link.unwrap();
+        assert_eq!((link.uid, link.class), (11, 0));
+        assert_eq!(link.uri, "file:C:/Images/photo%201.tif");
+        assert_eq!(image.contents, None);
+        // The same objects in a later file: no link is read.
+        let db = synthetic::database(&bytes, &objects);
+        assert_eq!(Reader::new(&db).graphic(10).unwrap().unwrap().link, None);
     }
 }

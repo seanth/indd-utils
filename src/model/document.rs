@@ -251,7 +251,7 @@ impl<'a> Reader<'a> {
             .chunk(DOC, chunk::DOC_ACTIVE_LAYER)?
             .map(|d| self.cursor(&d).u32())
             .transpose()?;
-        let (spreads, master_spreads) = self.document_spreads()?;
+        let (mut spreads, master_spreads) = self.document_spreads()?;
         let mut stories = self.document_stories()?;
         let xml_story = self.xml_story()?;
         // Stories of text frames anchored in the XML backing story are not
@@ -295,6 +295,7 @@ impl<'a> Reader<'a> {
         let tints = self.tints(&mut objects);
         prune_style_groups(&mut objects.style_groups, |m| self.warn(m));
         let preferences = self.document_preferences()?;
+        self.place_spreads(&mut spreads, preferences.as_ref())?;
         let prefs = self.prefs(version)?;
         let toc_styles = self.toc_styles(version);
         let stroke_styles = self.stroke_styles();
@@ -467,13 +468,78 @@ impl<'a> Reader<'a> {
         Ok((spreads, master_spreads))
     }
 
+    /// Give the spreads of a file that stores no spread transform (chunk
+    /// 0x56E; files before InDesign 5.0) the positions InDesign's IDML
+    /// has: each spread's origin is the previous one's plus half of both
+    /// spreads' heights, 180 pt, and the top and bottom bleed
+    /// (`objects.md`, spreads).
+    fn place_spreads(
+        &self,
+        spreads: &mut [Spread],
+        prefs: Option<&DocumentPreferences>,
+    ) -> Result<(), Error> {
+        for s in spreads.iter() {
+            if self.chunk(s.uid, chunk::SPREAD_TRANSFORM)?.is_some() {
+                return Ok(());
+            }
+        }
+        let bleed = prefs.map_or(0.0, |p| p.bleed[0] + p.bleed[1]);
+        // Pages are left, top, right, bottom.
+        let height = |s: &Spread| {
+            s.pages
+                .iter()
+                .map(|p| (p.bounds[3] - p.bounds[1]).abs())
+                .fold(0.0, f64::max)
+        };
+        let mut y = 0.0;
+        for i in 1..spreads.len() {
+            y += (height(&spreads[i - 1]) + height(&spreads[i])) / 2.0 + 180.0 + bleed;
+            spreads[i].transform = Matrix([1.0, 0.0, 0.0, 1.0, 0.0, y]);
+        }
+        Ok(())
+    }
+
     /// The stories the document lists. A story that cannot be read is
     /// left out with a warning.
     fn document_stories(&self) -> Result<Vec<Story>, Error> {
-        self.each_or_warn("story", chunk::DOC_STORIES, |uid| match self.class(uid) {
-            Some(class::STORY | class::ENDNOTE_STORY) => self.story(uid).map(Some),
-            _ => Ok(None),
-        })
+        let mut out = Vec::new();
+        for uid in self.story_list()? {
+            let story = match self.class(uid) {
+                Some(class::STORY | class::ENDNOTE_STORY) => self.story(uid),
+                _ => continue,
+            };
+            match story {
+                Ok(s) => out.push(s),
+                Err(e) => self.warn(format!("story {uid} left out: {e}")),
+            }
+        }
+        Ok(out)
+    }
+
+    /// The UIDs of the document's story list (chunk 0x222). Files from
+    /// InDesign 2.0 store a u32 count and then 6-byte records, a u32 UID
+    /// and a u16 flag; flag 2 marks the XML backing story, which is
+    /// written separately (`xml_story`). Later files store a UID list
+    /// (`objects.md`, document). A 2.0 chunk of another length is read
+    /// as a UID list.
+    fn story_list(&self) -> Result<Vec<u32>, Error> {
+        let Some(d) = self.chunk(DOC, chunk::DOC_STORIES)? else {
+            return Ok(Vec::new());
+        };
+        let mut c = self.cursor(&d);
+        let n = c.u32()? as usize;
+        let records = n.checked_mul(6).and_then(|b| b.checked_add(4)) == Some(d.len());
+        if !self.enc().indesign_2() || n == 0 || !records {
+            return self.cursor(&d).u32_list();
+        }
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            let uid = c.u32()?;
+            if c.u16()? != 2 {
+                out.push(uid);
+            }
+        }
+        Ok(out)
     }
 
     /// Read each object of the document's UID list `list` with `read`.
@@ -949,5 +1015,48 @@ mod percent_tests {
     fn decodes_percent_escapes() {
         assert_eq!(percent_decode("Ch%201%20%C3%A9.indd"), "Ch 1 é.indd");
         assert_eq!(percent_decode("100%"), "100%");
+    }
+}
+
+#[cfg(test)]
+mod story_list_tests {
+    use super::*;
+    use crate::database::synthetic;
+    use crate::header::{ByteOrder, Version};
+    use crate::object::Encoding;
+
+    fn story_list(chunk: Vec<u8>, encoding: Encoding) -> Vec<u32> {
+        let objects = [(
+            DOC,
+            class::DOCUMENT,
+            synthetic::chunks(&[(chunk::DOC_STORIES, chunk)]),
+        )];
+        let bytes = synthetic::image(&objects);
+        let db = synthetic::database_in(&bytes, &objects, encoding);
+        Reader::new(&db).story_list().unwrap()
+    }
+
+    #[test]
+    fn reads_the_story_records_of_indesign_2() {
+        let v2 = Encoding::new(ByteOrder::Little, Version { major: 2, minor: 0 });
+        let v3 = Encoding::new(ByteOrder::Little, Version { major: 3, minor: 0 });
+        // Four records: the backing story (flag 2) and three stories.
+        let mut records = 4u32.to_le_bytes().to_vec();
+        for (uid, flag) in [(73u32, 2u16), (129, 1), (153, 1), (271, 1)] {
+            records.extend_from_slice(&uid.to_le_bytes());
+            records.extend_from_slice(&flag.to_le_bytes());
+        }
+        assert_eq!(story_list(records.clone(), v2), [129, 153, 271]);
+        // Later files: a UID list, then the backing story's list. Four
+        // stories and one backing story give the same length (28 bytes)
+        // as four 2.0 records, so only the version tells them apart.
+        let mut lists = Vec::new();
+        for v in [4u32, 10, 11, 12, 13, 1, 14] {
+            lists.extend_from_slice(&v.to_le_bytes());
+        }
+        assert_eq!(lists.len(), records.len());
+        assert_eq!(story_list(lists, v3), [10, 11, 12, 13]);
+        // The same 2.0 bytes in a later file are read as a UID list.
+        assert_eq!(story_list(records, v3).len(), 4);
     }
 }
