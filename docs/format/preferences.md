@@ -334,6 +334,14 @@ without it have `-1 72` and 72, except one stale pair. Four u32 UIDs of
 interface colours follow; the IDML colours (`LightGray`, `GridBlue`) are
 not in the table of `objects.md`, so they are not written.
 
+The converter does not read the preferences of files from before 7.0
+(their layouts are not known; no IDML pair exists). For them it writes
+the values of IDML without the chunk, `-1 72` and 72, rather than no
+`PasteboardMargins` and `MinimumSpaceAboveAndBelow` at all; the spread
+positions of these files follow from these values (`objects.md`,
+spreads). Big-endian files of 7.0 and later, whose preferences are not
+read either, are left as they were: their pairs may have the chunk.
+
 From DOM 9 the chunk has 34 bytes, and byte 32 is
 `MatchPreviewBackgroundToThemeColor` (4 `true`): 199 of 199 files with
 a 34-byte chunk. Without the chunk, IDML from DOM 9 has `false` (1,156
