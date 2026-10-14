@@ -1021,15 +1021,19 @@ impl<'a> Reader<'a> {
         let Some(d) = self.chunk(uid, id)? else {
             return Ok(None);
         };
-        if d.len() < 44 {
+        // InDesign 2.0 stores the first 40 bytes only, without the master
+        // page flag and the side (`objects.md`, text wrap of InDesign 2.0):
+        // they get the values of `ApplyToMasterPageOnly="false"` and
+        // `BothSides`.
+        let short = d.len() == 40 && self.enc().indesign_2();
+        if d.len() < 44 && !short {
             return Ok(None);
         }
         let mut c = self.cursor(&d);
         let mode = c.u32()?;
         let path_uid = c.u32()?;
         let offsets = [c.f64()?, c.f64()?, c.f64()?, c.f64()?];
-        let master_flag = c.u16()?;
-        let side = c.u16()?;
+        let (master_flag, side) = if short { (1, 0) } else { (c.u16()?, c.u16()?) };
         if !matches!(
             mode,
             wrap_mode::NONE | wrap_mode::JUMP_OBJECT | wrap_mode::BOUNDING_BOX | wrap_mode::CONTOUR
@@ -2299,6 +2303,38 @@ mod old_link_tests {
     use super::*;
     use crate::database::synthetic;
     use crate::header::{ByteOrder, Version};
+
+    #[test]
+    fn reads_the_text_wrap_of_indesign_2() {
+        let mut d = 6u32.to_le_bytes().to_vec();
+        d.extend_from_slice(&11u32.to_le_bytes());
+        for v in [1.0f64, 1.0, 4.0, 1.0] {
+            d.extend_from_slice(&v.to_le_bytes());
+        }
+        assert_eq!(d.len(), 40);
+        let objects = [(
+            10,
+            class::SPLINE_ITEM,
+            synthetic::chunks(&[(chunk::TEXT_WRAP, d)]),
+        )];
+        let bytes = synthetic::image(&objects);
+        let v2 = Encoding::new(ByteOrder::Little, Version { major: 2, minor: 0 });
+        let db = synthetic::database_in(&bytes, &objects, v2);
+        let w = Reader::new(&db)
+            .wrap_chunk(10, chunk::TEXT_WRAP)
+            .unwrap()
+            .unwrap();
+        assert_eq!((w.mode, w.path_uid), (6, 11));
+        assert_eq!(w.offsets, [1.0, 1.0, 4.0, 1.0]);
+        // `ApplyToMasterPageOnly="false"`, `BothSides`.
+        assert_eq!((w.master_flag, w.side), (1, 0));
+        // A 40-byte chunk in a later file is still not read.
+        let db = synthetic::database(&bytes, &objects);
+        assert_eq!(
+            Reader::new(&db).wrap_chunk(10, chunk::TEXT_WRAP).unwrap(),
+            None
+        );
+    }
 
     #[test]
     fn makes_file_uris_of_windows_paths() {

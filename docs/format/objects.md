@@ -1444,6 +1444,22 @@ chunk 0x3703 (44 bytes):
 | 40 | u16 master page flag: 1 `ApplyToMasterPageOnly="false"`, 0 `true` |
 | 42 | u16 `TextWrapSide`: 0 `BothSides`, 1 `LeftSide`, 2 `RightSide`, 3 `SideTowardsSpine`, 4 `SideAwayFromSpine`, 5 `LargestArea` |
 
+**Text wrap of InDesign 2.0.** In files from InDesign 2.0 the chunk
+has 40 bytes: the fields up to offset 40 above, without the master
+page flag and the side. The converter reads them and writes
+`ApplyToMasterPageOnly="false"` and `BothSides`, the values of codes 1
+and 0. Evidence: three privately held 2.0 documents with their print
+PDFs (above, the story list of InDesign 2.0): 129 of 129 chunks are
+40 bytes (115 page items, 13 images, 1 group); the modes are 0 (89),
+3 (17) and 6 (23); each of the 40 items with mode 3 or 6 names a wrap
+path object (class 0x3702) whose chunk 0x3709 has 10 bytes and custom
+path flag 0 (40 of 40), so no path is written. In the PDFs, text keeps
+clear of these items: on the pages with mode 6 images and mode 3
+frames, the text beside them is set around them, and a justified
+paragraph's left edge steps right beside an image while its right edge
+stays flush. The converter took the 40-byte chunk for no chunk, and
+wrote every item of these documents with `TextWrapMode="None"`.
+
 **Wrap path.** Every item with wrap mode 1, 2, 3 or 6 (and the codes
 0x10003 and 0x10006) has a wrap path object; mode 0 items have none
 (9,061 objects in 735 files of the corpus of 2026-10). The u32 at 4
