@@ -288,6 +288,9 @@ impl<'a> Reader<'a> {
         for story in &mut stories {
             story.orientation = self.story_orientation(story.uid);
         }
+        if self.enc().indesign_2() {
+            self.justification_2(&mut objects.styles, &mut stories);
+        }
         let xml = XmlStructure {
             story: xml_story,
             elements: self.xml_elements(&objects.xml_tag_names)?,
@@ -497,6 +500,90 @@ impl<'a> Reader<'a> {
             spreads[i].transform = Matrix([1.0, 0.0, 0.0, 1.0, 0.0, y]);
         }
         Ok(())
+    }
+
+    /// Paragraph alignment of InDesign 2.0: two text attributes, 0x1B05
+    /// (0 left, 1 center, 2 right, 3 justified) and 0x1B04 (the alignment
+    /// of the last line), stand for the one `Justification` (0x1B7E) of
+    /// later files (`attributes.md`, alignment in InDesign 2.0). Wherever a
+    /// style or paragraph sets either, its effective pair, through its
+    /// paragraph style and their `BasedOn` chain, becomes 0x1B7E. Only
+    /// the pairs the samples show are mapped; another pair is left out
+    /// with a warning.
+    fn justification_2(&self, styles: &mut BTreeMap<u32, Style>, stories: &mut [Story]) {
+        const LAST: u32 = 0x1B04;
+        const ALIGN: u32 = 0x1B05;
+        const JUSTIFICATION: u32 = 0x1B7E;
+        let code = |attrs: &Attrs, id: u32| attrs.get(id).and_then(Value::as_u32);
+        // The value of `id` in style `uid` or the styles it is based on.
+        let inherited = |styles: &BTreeMap<u32, Style>, mut uid: Option<u32>, id: u32| {
+            let mut seen = Vec::new();
+            while let Some(u) = uid {
+                if seen.contains(&u) {
+                    break;
+                }
+                seen.push(u);
+                let Some(s) = styles.get(&u) else { break };
+                if let Some(v) = code(&s.attrs, id) {
+                    return Some(v);
+                }
+                uid = s.based_on;
+            }
+            None
+        };
+        let map = |pair: (u32, u32)| -> Option<u16> {
+            Some(match pair {
+                (0, 0) => 0, // LeftAlign
+                (1, 1) => 1, // CenterAlign
+                (2, 2) => 2, // RightAlign
+                (0, 3) => 4, // LeftJustified
+                (1, 3) => 5, // CenterJustified
+                (2, 3) => 6, // RightJustified
+                _ => return None,
+            })
+        };
+        let resolve = |attrs: &Attrs, parent: Option<u32>, styles: &BTreeMap<u32, Style>| {
+            if code(attrs, LAST).is_none() && code(attrs, ALIGN).is_none() {
+                return None;
+            }
+            let get = |id| {
+                code(attrs, id)
+                    .or_else(|| inherited(styles, parent, id))
+                    .unwrap_or(0)
+            };
+            Some((get(LAST), get(ALIGN)))
+        };
+        let set = |attrs: &mut Attrs, pair: (u32, u32), what: &str| match map(pair) {
+            Some(j) => {
+                attrs.values.retain(|(id, _)| *id != JUSTIFICATION);
+                attrs.values.push((JUSTIFICATION, Value::Enum(j)));
+            }
+            None => self.warn(format!(
+                "{what}: alignment {} with last line {} is not known; left out",
+                pair.1, pair.0
+            )),
+        };
+        let pairs: Vec<(u32, (u32, u32))> = styles
+            .values()
+            .filter(|s| s.paragraph)
+            .filter_map(|s| resolve(&s.attrs, s.based_on, styles).map(|p| (s.uid, p)))
+            .collect();
+        for (uid, pair) in pairs {
+            if let Some(s) = styles.get_mut(&uid) {
+                set(&mut s.attrs, pair, &format!("style {uid}"));
+            }
+        }
+        for story in stories {
+            for run in &mut story.runs {
+                if let Some(pair) = resolve(&run.paragraph_attrs, run.paragraph_style, styles) {
+                    set(
+                        &mut run.paragraph_attrs,
+                        pair,
+                        &format!("story {}", story.uid),
+                    );
+                }
+            }
+        }
     }
 
     /// The stories the document lists. A story that cannot be read is
@@ -1058,5 +1145,62 @@ mod story_list_tests {
         assert_eq!(story_list(lists, v3), [10, 11, 12, 13]);
         // The same 2.0 bytes in a later file are read as a UID list.
         assert_eq!(story_list(records, v3).len(), 4);
+    }
+}
+
+#[cfg(test)]
+mod justification_tests {
+    use super::*;
+    use crate::database::synthetic;
+
+    fn style(uid: u32, based_on: Option<u32>, values: &[(u32, u16)]) -> Style {
+        let mut attrs = Attrs::default();
+        attrs.values = values.iter().map(|&(id, v)| (id, Value::Enum(v))).collect();
+        Style {
+            uid,
+            name: format!("s{uid}"),
+            builtin: false,
+            paragraph: true,
+            based_on,
+            next: None,
+            attrs,
+            imported: false,
+            unique_id: None,
+            shortcut: None,
+            export: None,
+            preview_color: None,
+        }
+    }
+
+    #[test]
+    fn maps_the_alignment_of_indesign_2_through_based_on() {
+        let objects = [(1, class::DOCUMENT, Vec::new())];
+        let bytes = synthetic::image(&objects);
+        let db = synthetic::database(&bytes, &objects);
+        let reader = Reader::new(&db);
+        let mut styles = BTreeMap::from([
+            (59, style(59, None, &[(0x1B04, 0), (0x1B05, 0)])),
+            (62, style(62, Some(59), &[(0x1B05, 3)])),
+            (63, style(63, Some(62), &[(0x1B04, 1)])),
+            (64, style(64, Some(59), &[(0x1B04, 2)])),
+            (65, style(65, Some(59), &[])),
+        ]);
+        reader.justification_2(&mut styles, &mut []);
+        let j = |uid: u32| {
+            styles[&uid]
+                .attrs
+                .values
+                .iter()
+                .find(|(id, _)| *id == 0x1B7E)
+                .map(|(_, v)| v.clone())
+        };
+        assert_eq!(j(59), Some(Value::Enum(0))); // LeftAlign
+        assert_eq!(j(62), Some(Value::Enum(4))); // LeftJustified
+        assert_eq!(j(63), Some(Value::Enum(5))); // CenterJustified, 3 inherited
+        // Last line right with left alignment: not in the samples.
+        assert_eq!(j(64), None);
+        assert_eq!(reader.warnings.borrow().len(), 1);
+        // A style that sets neither keeps inheriting.
+        assert_eq!(j(65), None);
     }
 }
