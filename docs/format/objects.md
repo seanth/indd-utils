@@ -62,7 +62,7 @@ are in `big-endian.md`.
 | 0x1401 | UID list: master spreads |
 | 0x301 | UID list: layers (the first is an internal layer that holds pages) |
 | 0x313 | u32: active layer (IDML `ActiveLayer`) |
-| 0x222 | Two UID lists: the stories, then the XML backing story; IDML `StoryList` is both (`xml.md`) |
+| 0x222 | Two UID lists: the stories, then the XML backing story; IDML `StoryList` is both (`xml.md`). InDesign 2.0: one list of 6-byte records (below) |
 | 0x4C01 | UID list: sections |
 | 0xA443 | Document users: u32 count, then per user a flag byte, the name as an in-object string, u32 colour |
 | 0x1D8 | Save history: u32 count, then one record per session (below) |
@@ -77,6 +77,22 @@ label match (one differs, one has no chunk). The flag byte is 1 on 4
 keys in 4 pairs, all others 0; the 3 of these pairs whose IDML has a
 document label write the key without the `$ID/` prefix of built-in
 names.
+
+**The story list of InDesign 2.0.** In files from InDesign 2.0, chunk
+0x222 is a u32 count *n* and then *n* records of 6 bytes: a u32 UID and
+a u16 flag. Flag 2 marks the XML backing story (the story chunk 0xBF14
+names); the others have flag 1. There is no second list. Evidence: three
+privately held InDesign 2.0 documents with their print PDFs, which have
+no IDML (`CLEANROOM.md`, points a reviewer should know): the chunk is
+4 + 6*n* bytes in 3 of 3 (19, 30 and 37 records), every record names a
+story object (86 of 86) and the records name every story object of the
+file, flag 2 occurs once per file and names the story of chunk 0xBF14
+in 3 of 3. Read as a UID list, the chunk gives 10 of 30 stories in one
+of them, and the text of the others is missing from the output; read as
+records, 98 to 99 % of the words of each PDF are in the converted
+stories. A later file's two lists can have the same length (four
+stories and one backing story take 28 bytes, as four records do), so
+the converter reads records only in files from 2.0.
 
 **Script byte of the user names.** The second byte of each user name's
 in-object string (the byte after the string tag) is a script code: 0
