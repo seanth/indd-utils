@@ -2954,9 +2954,29 @@ no chunk 0x8CBC, and their chunk 0x8C1B (u32) names an object of class
 0x8C01. That object's chunk 0x8C2A names the image back in 759 of 762.
 No file of these versions has an IDML pair, so it is not known whether
 IDML would write the preview as `Contents`. The converter treats these
-images as linked graphics whose link it does not read: no `Contents`,
-and the preview goes to `Conversion::previews`. In files of later
-versions, 0x8C1B of such an image is 0 or absent in every case.
+images as linked graphics: no `Contents`, and the preview goes to
+`Conversion::previews`. It reads their link in files from 2.0 only
+(below); in files from 3.0 to 5.0 the link is not read. In files of
+later versions, 0x8C1B of such an image is 0 or absent in every case.
+
+**Links of InDesign 2.0.** In files from InDesign 2.0 the old link
+object (class 0x8C01) has chunks 0x8C04, 0x8C1B and 0x8C6B. Chunk
+0x8C04 holds the linked file's path as a flag byte and an in-object
+string (tag 1) at offset 24; chunk 0x8C1B names the object the link
+belongs to, an image or a story (placed text). Evidence: three
+privately held 2.0 documents (above, the story list of InDesign 2.0),
+51 of 51 old link objects: the same three chunks in 51, the string at
+24 parses in 51, every path starts with a drive letter (`C:\`). Of the
+51, 28 name an image in chunk 0x8C1B and 23 a story; each of the 28
+images names its link back in its own 0x8C1B (28 of 28), and the
+documents have no other images. The 16 bytes before the path are not
+identified. No IDML exists for these files; the converter writes the
+link of each image as IDML writes a graphic link (class 0x8C42,
+`StoredState="Normal"`), with the path as `LinkResourceURI` by the
+reverse of the `FilePath` rule (`file:`, `\` as `/`, percent-encoded;
+above, movies and sounds), and leaves `LinkResourceFormat`, the import
+stamp and the times out. Links of stories are not written. Not known:
+the form of a path saved on a Mac.
 
 Not known: why these images keep their file in the preview rather than
 in a raw data object named by 0x8C23. None of the 77 images whose 0x8C23
