@@ -251,7 +251,7 @@ impl<'a> Reader<'a> {
             .chunk(DOC, chunk::DOC_ACTIVE_LAYER)?
             .map(|d| self.cursor(&d).u32())
             .transpose()?;
-        let (spreads, master_spreads) = self.document_spreads()?;
+        let (mut spreads, master_spreads) = self.document_spreads()?;
         let mut stories = self.document_stories()?;
         let xml_story = self.xml_story()?;
         // Stories of text frames anchored in the XML backing story are not
@@ -295,6 +295,7 @@ impl<'a> Reader<'a> {
         let tints = self.tints(&mut objects);
         prune_style_groups(&mut objects.style_groups, |m| self.warn(m));
         let preferences = self.document_preferences()?;
+        self.place_spreads(&mut spreads, preferences.as_ref())?;
         let prefs = self.prefs(version)?;
         let toc_styles = self.toc_styles(version);
         let stroke_styles = self.stroke_styles();
@@ -465,6 +466,37 @@ impl<'a> Reader<'a> {
             })?;
         resolve_page_layout(&mut spreads, &mut master_spreads);
         Ok((spreads, master_spreads))
+    }
+
+    /// Give the spreads of a file that stores no spread transform (chunk
+    /// 0x56E; files before InDesign 5.0) the positions InDesign's IDML
+    /// has: each spread's origin is the previous one's plus half of both
+    /// spreads' heights, 180 pt, and the top and bottom bleed
+    /// (`objects.md`, spreads).
+    fn place_spreads(
+        &self,
+        spreads: &mut [Spread],
+        prefs: Option<&DocumentPreferences>,
+    ) -> Result<(), Error> {
+        for s in spreads.iter() {
+            if self.chunk(s.uid, chunk::SPREAD_TRANSFORM)?.is_some() {
+                return Ok(());
+            }
+        }
+        let bleed = prefs.map_or(0.0, |p| p.bleed[0] + p.bleed[1]);
+        // Pages are left, top, right, bottom.
+        let height = |s: &Spread| {
+            s.pages
+                .iter()
+                .map(|p| (p.bounds[3] - p.bounds[1]).abs())
+                .fold(0.0, f64::max)
+        };
+        let mut y = 0.0;
+        for i in 1..spreads.len() {
+            y += (height(&spreads[i - 1]) + height(&spreads[i])) / 2.0 + 180.0 + bleed;
+            spreads[i].transform = Matrix([1.0, 0.0, 0.0, 1.0, 0.0, y]);
+        }
+        Ok(())
     }
 
     /// The stories the document lists. A story that cannot be read is

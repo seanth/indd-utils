@@ -322,6 +322,19 @@ trustworthy pairs:
   equals the IDML list for 9,367 of 9,367 pages (8 with a tab order);
   pages not in the chunk have an empty `TabOrder`.
 
+**Spreads without a transform.** No spread of three privately held
+InDesign 2.0 documents (19 spreads; `objects.md`, the story list of
+InDesign 2.0) has chunk 0x56E, so every spread would be written at the
+origin. IDML exported by InDesign stacks the spreads vertically: each
+spread's `ItemTransform` moves it down from the previous one by half of
+both spreads' page heights, plus 180 pt, plus the top and bottom bleed.
+Evidence: the two fixtures that store spread transforms, 6 of 6 steps
+(a 9.2 file with 1,000 pt pages and no bleed, step 1,180; a 7.5 file
+with 666 pt pages and a 9 pt bleed, step 846). When no spread of a
+document has chunk 0x56E, the converter places the spreads by this
+rule. Not known: the effect of a slug, or of a pasteboard other than
+the default (72 pt above and below).
+
 **Page transitions.** Chunk 0x2050C gives `PageTransitionType` and
 `PageTransitionDirection`. Over the 11,676 spreads of the distinct
 little-endian pairs with the same major version (corpus after 2026-10):
