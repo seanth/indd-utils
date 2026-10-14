@@ -3561,6 +3561,20 @@ bytes), so the converter locates it as a flag byte followed by a valid
 in-object string.
 All 486 style names and 291 `NextStyle` values in the pairs match.
 
+**Style names in InDesign 2.0.** The name starts at offset 20: u16 kind
+at 16, u16 at 18, flag byte at 20, then an in-object string with tag 1
+(above, in-object strings) that ends the chunk. Evidence: three
+privately held 2.0 documents (above, the story list of InDesign 2.0),
+22 of 22 styles; the kind is 1 in 14 and 0 in 8, and the flag is 1 on
+the two root styles of each document (`[No paragraph style]`,
+`[No character style]`). The search for a flag byte and a string must
+accept tag 1 in these files. In the 6 root styles, bytes 15 to 19 (0, 1,
+0, 0, 0) also read as a flag byte and an empty tag-1 string; the search
+skips empty strings in 2.0 files, as a style name is never empty. Before
+this, every style of these documents was left out ("no name"), the
+paragraphs named styles that the IDML did not define, and the root
+style's font (the default of most text) was lost.
+
 **Imported and unique ID.** Over the 4,694 paragraph and character
 styles of the trustworthy pairs whose IDML style has the same name, the
 u16 after the kind equals `Imported` in 4,694 (180 imported). The GUID
