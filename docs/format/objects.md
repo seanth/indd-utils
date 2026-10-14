@@ -4295,6 +4295,24 @@ over the trustworthy pairs after 2026-10, 670 more elements, with no
 wrong or extra value (`FirstBaselineOffset` 2,731 of 2,731,
 `AutoSizingType` 16,202 of 16,202).
 
+**First baseline of InDesign 2.0.** Frames of InDesign 2.0 have a
+26-byte chunk 0x2CE. In three privately held 2.0 documents (above, the
+story list of InDesign 2.0) the u16 at 0 is 0 in 95 of 95 frames, but
+the first lines are not set as code 0 (`LeadingOffset`) sets them. In
+their print PDFs, the first baseline of the first frame of a story lies
+below the frame's top inset by the height of the font's `d`, which is
+what `AscentOffset` sets: over the 36 such frames whose font is embedded
+with a `d`, the offset divided by the point size equals the `d`'s top
+divided by the em in 27 (within 0.004; Times New Roman regular, italic
+and bold italic, Garamond bold and bold italic, Palatino) and is within
+0.015 in 4 more (Arial: 0.728, `d` 0.716). Five frames are further off
+and are not explained (very large type, a frame whose first line is not
+the first text). None is one leading (about 1.2 times the size) below
+the top. The converter writes `FirstBaselineOffset="AscentOffset"` for
+every 2.0 frame. With `LeadingOffset`, each frame's first line sat about
+6 pt too low, and short frames such as running heads could not hold
+their text.
+
 The frame itself (class 0x6201) holds the inset spacing in chunk 0x3723
 (44 bytes): f64, u32, then four f64 (left, top, right, bottom). IDML
 writes `InsetSpacing` as a list of top, left, bottom and right, or as

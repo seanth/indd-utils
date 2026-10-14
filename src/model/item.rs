@@ -790,7 +790,14 @@ impl<'a> Reader<'a> {
             column_count: self.cursor(&cols).u32()?,
             column_gutter: self.cursor(&cols[4..]).f64()?,
             column_fixed_width: self.cursor(&cols[14..]).f64()?,
-            first_baseline_offset: self.cursor(&just).u16()?,
+            // InDesign 2.0 frames set the first baseline as `AscentOffset`
+            // does, whatever the u16 at 0 (`objects.md`, first baseline of
+            // InDesign 2.0).
+            first_baseline_offset: if self.enc().indesign_2() {
+                1
+            } else {
+                self.cursor(&just).u16()?
+            },
             vertical_justification: self.cursor(&just[2..]).u16()?,
             vertical_balance_columns: self.cursor(&just[20..]).u16()? != 0,
             auto_sizing_type: auto_sizing.then(|| self.enc().u16_at(&just, 22)).flatten(),
@@ -2303,6 +2310,38 @@ mod old_link_tests {
     use super::*;
     use crate::database::synthetic;
     use crate::header::{ByteOrder, Version};
+
+    #[test]
+    fn sets_the_first_baseline_of_indesign_2_frames() {
+        // Chunk 0x2D1 (one column) and the 26-byte chunk 0x2CE of 2.0.
+        let mut cols = 1u32.to_le_bytes().to_vec();
+        cols.resize(22, 0);
+        let mut just = vec![0u8; 26];
+        just[6] = 1;
+        let objects = [
+            (10, class::SPLINE_ITEM, Vec::new()),
+            (
+                11,
+                0x263,
+                synthetic::chunks(&[
+                    (chunk::FRAME_COLUMNS, cols),
+                    (chunk::FRAME_JUSTIFICATION, just),
+                ]),
+            ),
+        ];
+        let bytes = synthetic::image(&objects);
+        let v2 = Encoding::new(ByteOrder::Little, Version { major: 2, minor: 0 });
+        let first = |db: &crate::database::Database| {
+            Reader::new(db)
+                .text_frame_preferences(10, 11)
+                .unwrap()
+                .unwrap()
+                .first_baseline_offset
+        };
+        // `AscentOffset` in a 2.0 file, the stored code (0) otherwise.
+        assert_eq!(first(&synthetic::database_in(&bytes, &objects, v2)), 1);
+        assert_eq!(first(&synthetic::database(&bytes, &objects)), 0);
+    }
 
     #[test]
     fn reads_the_text_wrap_of_indesign_2() {
