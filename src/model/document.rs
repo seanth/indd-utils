@@ -539,6 +539,7 @@ impl<'a> Reader<'a> {
                 (0, 3) => 4, // LeftJustified
                 (1, 3) => 5, // CenterJustified
                 (2, 3) => 6, // RightJustified
+                (3, 3) => 3, // FullyJustified
                 _ => return None,
             })
         };
@@ -1184,6 +1185,7 @@ mod justification_tests {
             (63, style(63, Some(62), &[(0x1B04, 1)])),
             (64, style(64, Some(59), &[(0x1B04, 2)])),
             (65, style(65, Some(59), &[])),
+            (66, style(66, Some(62), &[(0x1B04, 3)])),
         ]);
         reader.justification_2(&mut styles, &mut []);
         let j = |uid: u32| {
@@ -1197,6 +1199,7 @@ mod justification_tests {
         assert_eq!(j(59), Some(Value::Enum(0))); // LeftAlign
         assert_eq!(j(62), Some(Value::Enum(4))); // LeftJustified
         assert_eq!(j(63), Some(Value::Enum(5))); // CenterJustified, 3 inherited
+        assert_eq!(j(66), Some(Value::Enum(3))); // FullyJustified
         // Last line right with left alignment: not in the samples.
         assert_eq!(j(64), None);
         assert_eq!(reader.warnings.borrow().len(), 1);

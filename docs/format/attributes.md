@@ -1573,7 +1573,11 @@ story list of InDesign 2.0), the pairs in effect (0x1B04, 0x1B05)
 are (0, 0) 16, (1, 1) 26, (2, 2) 11, (0, 3) 13, (1, 3) 6 and (2, 3) 10.
 They are mapped as (0, 0) `LeftAlign`, (1, 1) `CenterAlign`, (2, 2)
 `RightAlign`, (0, 3) `LeftJustified`, (1, 3) `CenterJustified` and (2,
-3) `RightJustified`. Whether 0x1B04 is the alignment of the last line or
+3) `RightJustified`. A seventh pair, (3, 3), occurs once, in a later
+2.0 document: a one-word paragraph whose word the PDF spreads over the
+frame's full width (letters from 86 to 514 pt in a frame from 86.1 to
+513.6), so its last line is justified too; it is mapped as
+`FullyJustified`. Whether 0x1B04 is the alignment of the last line or
 of the whole paragraph cannot be told from these pairs (they agree
 where 0x1B05 is below 3), so no other pair is mapped: the converter
 leaves it out with a warning. Evidence from the print PDFs, over the
